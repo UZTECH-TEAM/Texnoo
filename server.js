@@ -588,13 +588,11 @@ app.get('/auth/google', (req, res, next) => {
   }
   const action = req.query.action || 'login';
   if (req.session) req.session.oauthAction = action;
-  passport.authenticate('google', { scope: ['profile', 'email'], state: action })(req, res, (err) => {
-    if (err) {
-      console.error('Google Passport Error:', err);
-      return res.redirect('/callback.html?error=' + encodeURIComponent(err.message || 'OAuth error'));
-    }
-    next();
-  });
+  passport.authenticate('google', {
+    scope: ['profile', 'email'],
+    prompt: 'select_account',
+    state: action
+  })(req, res, next);
 });
 
 app.get('/auth/google/callback', (req, res, next) => {
