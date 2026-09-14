@@ -43,7 +43,7 @@
       --bor2: rgba(255, 255, 255, .06);
       --r: 10px;
       --hh: 54px;
-      --maint-h: 38px;
+      --maint-h: 0px;
 
       --scan: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 229, 255, .015) 2px, rgba(0, 229, 255, .015) 4px);
     }
@@ -636,7 +636,7 @@
       box-shadow: 0 1px 30px rgba(0, 0, 0, .5), 0 0 1px rgba(0, 229, 255, .2);
       flex-shrink: 0;
       position: sticky;
-      top: var(--maint-h);
+      top: 0;
       z-index: 100;
     }
 
@@ -4290,12 +4290,6 @@
     </div>
   </div>
 
-  <div class="maintenance-banner">
-    <div class="maintenance-track">
-      <div class="maintenance-text">TEXNOO.COM TAMIRLANMOQDA • 2 KUNDA ISHGA TUSHADI • TEXNOO.COM TAMIRLANMOQDA • 2 KUNDA ISHGA TUSHADI •</div>
-    </div>
-  </div>
-
   <!-- TOPBAR -->
   <div class="topbar" id="topbar" style="display:none;">
     <button id="sidebarToggle" onclick="toggleSB()"><i class="fas fa-bars"></i></button>
@@ -4431,6 +4425,7 @@
         <div class="nav-item" onclick="showPage('hwspg',this,'VAZIFALARIM')"><i class="fas fa-tasks"></i> Vazifalarim <span class="badge-notif" id="hwPendingBadge" style="display:none;">0</span></div>
         <div class="nav-item" onclick="showPage('battlepg',this,'TA\'LIM O\'YINLARI')"><i class="fas fa-gamepad" style="color:var(--gold);"></i> Ta'lim o'yinlari</div>
         <div class="nav-item" onclick="showPage('aitutorpg',this,'AI REPETITOR')"><i class="fas fa-robot" style="color:var(--green);"></i> AI Repetitor</div>
+        <div class="nav-item" onclick="showPage('apigenpg',this,'API GENERATOR (TEXNOO AUTH)');loadOAuthApps();"><i class="fas fa-key" style="color:var(--cyan);"></i> API Generator (Texnoo Auth)</div>
         <div class="nav-sec">Hisob</div>
         <div class="nav-item" onclick="doLogout()"><i class="fas fa-sign-out-alt"></i> Chiqish</div>
       </nav>
@@ -4458,6 +4453,7 @@
           boshqaruvi</div>
         <div class="nav-item" onclick="showPage('aiassistpg',this,'AI YORDAMCHI')"><i class="fas fa-robot" style="color:var(--green);"></i> AI Yordamchi</div>
         <div class="nav-item" onclick="showPage('certsadminpg',this,'SERTIFIKATLAR')"><i class="fas fa-certificate" style="color:var(--gold);"></i> Sertifikatlar</div>
+        <div class="nav-item" onclick="showPage('apigenpg',this,'API GENERATOR (TEXNOO AUTH)');loadOAuthApps();"><i class="fas fa-key" style="color:var(--cyan);"></i> API Generator (Texnoo Auth)</div>
         <div class="nav-sec">Profil</div>
         <div class="nav-item" onclick="showPage('tapg',this,'PROFIL')"><i class="fas fa-id-card"></i> Profil</div>
         <div class="nav-item" onclick="doLogout()"><i class="fas fa-sign-out-alt"></i> Chiqish</div>
@@ -4479,6 +4475,7 @@
         <div class="nav-item" onclick="showPage('monpg',this,'MONITORING')"><i class="fas fa-eye"></i> Monitoring</div>
         <div class="nav-item" onclick="showPage('certsadminpg',this,'SERTIFIKATLAR')"><i class="fas fa-certificate" style="color:var(--gold);"></i> Sertifikatlar</div>
         <div class="nav-item" onclick="showPage('ejobsadminpg',this,'ISH E\'LONLARI')"><i class="fas fa-briefcase" style="color:var(--cyan);"></i> Ish e'lonlari</div>
+        <div class="nav-item" onclick="showPage('apigenpg',this,'API GENERATOR (TEXNOO AUTH)');loadOAuthApps();"><i class="fas fa-key" style="color:var(--cyan);"></i> API Generator (Texnoo Auth)</div>
         <div class="nav-sec">Profil</div>
         <div class="nav-item" onclick="showPage('tapg',this,'PROFIL')"><i class="fas fa-user-shield"></i> Profil</div>
         <div class="nav-item" onclick="showPage('settpg',this,'SOZLAMALAR')"><i class="fas fa-gear"></i> Sozlamalar</div>
@@ -4510,6 +4507,57 @@
 
     <!-- MAIN CONTENT -->
     <div id="mainContent">
+
+      <!-- ══ API GENERATOR (TEXNOO AUTH) PAGE ══ -->
+      <div id="apigenpg" class="page-sec" style="display:none;padding:20px;max-width:1100px;margin:0 auto;">
+        <div class="sc-head mb-16" style="margin-bottom:16px;">
+          <div class="sc-title" style="font-size:22px;font-weight:800;color:var(--cyan);display:flex;align-items:center;gap:10px;">
+            <i class="fas fa-shield-halved"></i> TEXNOO AUTH API GENERATOR (OWASP OAUTH 2.0)
+          </div>
+        </div>
+        <p style="color:var(--text2);margin-bottom:24px;font-size:13px;line-height:1.6;">
+          Google OAuth xizmati singari, o'z web saytingiz yoki ilovangiz uchun Texnoo Auth API orqali bir martalik avtorizatsiya va profil ma'lumotlarini olish tizimini ulashingiz mumkin.
+          Foydalanuvchilar Texnoo hisobi orqali kirganda sizga ularning <b>Profil rasmi (Avatar), Ismi hamda Emaili</b> taqdim etiladi. (OWASP xavfsizlik va Whitelist standartlariga to'liq mos keladi).
+        </p>
+
+        <!-- API YARATISH FORMASI -->
+        <div class="card mb-24" style="background:var(--card);border:1px solid var(--bor);border-radius:14px;padding:24px;margin-bottom:24px;">
+          <div style="font-size:16px;font-weight:700;color:var(--cyan);margin-bottom:16px;display:flex;align-items:center;gap:8px;">
+            <i class="fas fa-plus-circle"></i> Yangi API Kalit (Client ID) Yaratish
+          </div>
+          
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px;">
+            <div>
+              <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:6px;font-weight:600;">Ilova Nomi (App Name)*</label>
+              <input type="text" id="apiAppName" class="inp" placeholder="Masalan: Mening Onlayn Do'konim" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--bor);color:var(--text);border-radius:8px;box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:6px;font-weight:600;">So'rov keladigan sayt manzili (Origin URL)*</label>
+              <input type="text" id="apiRequestUrl" class="inp" placeholder="https://mysite.com (yoki http://localhost:3000)" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--bor);color:var(--text);border-radius:8px;box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:6px;font-weight:600;">Callback / Redirect manzili (Callback URL)*</label>
+              <input type="text" id="apiCallbackUrl" class="inp" placeholder="https://mysite.com/callback.html" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--bor);color:var(--text);border-radius:8px;box-sizing:border-box;">
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;">
+            <button class="btn btn-cyan" onclick="createOAuthApp()" style="padding:10px 24px;font-weight:700;border-radius:8px;cursor:pointer;"><i class="fas fa-magic"></i> API Generatsiya Qilish</button>
+          </div>
+        </div>
+
+        <!-- GENERATSIYA QILINGAN APILAR RO'YXATI -->
+        <div class="card" style="background:var(--card);border:1px solid var(--bor);border-radius:14px;padding:24px;">
+          <div style="font-size:16px;font-weight:700;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+            <span><i class="fas fa-list-check" style="color:var(--green);"></i> Generatsiya qilingan API kalitlar (Oq ro'yxat)</span>
+            <button class="btn btn-sm" onclick="loadOAuthApps()" style="background:var(--card2);color:var(--cyan);border:1px solid var(--bor);padding:6px 14px;border-radius:6px;cursor:pointer;"><i class="fas fa-sync"></i> Yangilash</button>
+          </div>
+
+          <div id="oauthAppList" style="display:flex;flex-direction:column;gap:16px;">
+            <div style="padding:20px;text-align:center;color:var(--text3);">Yuklanmoqda...</div>
+          </div>
+        </div>
+      </div>
 
       <!-- ══ CHAT PAGE ══ -->
       <div id="chatPage" class="chat-layout">

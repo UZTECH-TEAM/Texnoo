@@ -3825,3 +3825,232 @@ if (_origRP) {
 
 // Call on init
 setTimeout(handleGoogleCallback, 1000);
+
+// ════════════════════════════════════════════════════════════════════════
+// API GENERATOR & TEXNOO AUTH FRONTEND LOGIC
+// ════════════════════════════════════════════════════════════════════════
+window.loadOAuthApps = async function() {
+  const container = document.getElementById('oauthAppList');
+  if (!container) return;
+
+  const uId = curId || curTeacherId || curAdminId;
+  const uType = curType || 'student';
+  if (!uId || !uType) {
+    container.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);">API generator ishlatish uchun avval tizimga kiring.</div>`;
+    return;
+  }
+
+  container.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text2);"><i class="fas fa-spinner fa-spin"></i> API kalitlar yuklanmoqda...</div>`;
+
+  try {
+    const res = await fetch(`/api/oauth/apps?userId=${uId}&userType=${uType}`);
+    const data = await res.json();
+
+    if (!data.ok || !Array.isArray(data.data) || data.data.length === 0) {
+      container.innerHTML = `
+        <div style="padding:30px;text-align:center;color:var(--text3);border:1px dashed var(--bor);border-radius:12px;">
+          <i class="fas fa-key" style="font-size:32px;opacity:.3;margin-bottom:8px;"></i>
+          <div>Hozircha hech qanday API kalit yaratilmagan. Yuqoridagi forma orqali birinchi API kalitingizni yarating.</div>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = data.data.map(app => {
+      const origins = app.allowedOrigins.join(', ');
+      const callbacks = app.allowedCallbacks.join(', ');
+      const createdDate = new Date(app.createdAt).toLocaleDateString('uz-UZ', { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+
+      return `
+        <div style="background:var(--card2);border:1px solid var(--bor);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+            <div>
+              <div style="font-size:16px;font-weight:800;color:#fff;"><i class="fas fa-laptop-code" style="color:var(--cyan);"></i> ${escHtml(app.appName)}</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:2px;">Yaratilgan: ${createdDate}</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-sm" onclick="showOAuthSdkCodeModal('${escHtml(app.clientId)}')" style="background:rgba(0,229,255,0.1);color:var(--cyan);border:1px solid rgba(0,229,255,0.3);"><i class="fas fa-code"></i> SDK Ulanish kodi</button>
+              <button class="btn btn-sm" onclick="openEditOAuthAppModal('${escHtml(app.clientId)}', '${escHtml(app.appName)}', '${escHtml(origins)}', '${escHtml(callbacks)}')" style="background:rgba(255,204,0,0.1);color:var(--gold);border:1px solid rgba(255,204,0,0.3);"><i class="fas fa-edit"></i> Oq ro'yxatni almashtirish / Tahrirlash</button>
+              <button class="btn btn-sm" onclick="deleteOAuthApp('${escHtml(app.clientId)}')" style="background:rgba(255,56,96,0.1);color:var(--red);border:1px solid rgba(255,56,96,0.3);"><i class="fas fa-trash"></i></button>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;background:var(--bg);padding:14px;border-radius:8px;font-size:12px;">
+            <div>
+              <span style="color:var(--text3);display:block;margin-bottom:2px;font-weight:600;">Client ID (Public Key):</span>
+              <div style="font-family:monospace;color:var(--cyan);word-break:break-all;display:flex;align-items:center;gap:6px;">
+                <span>${escHtml(app.clientId)}</span>
+                <i class="fas fa-copy" style="cursor:pointer;" onclick="copyToClipboard('${escHtml(app.clientId)}')" title="Nusxalash"></i>
+              </div>
+            </div>
+            <div>
+              <span style="color:var(--text3);display:block;margin-bottom:2px;font-weight:600;">Oq ro'yxat: So'rov keladigan domen (Origin URL):</span>
+              <div style="color:var(--green);word-break:break-all;"><i class="fas fa-shield-halved"></i> ${escHtml(origins)}</div>
+            </div>
+            <div>
+              <span style="color:var(--text3);display:block;margin-bottom:2px;font-weight:600;">Oq ro'yxat: Callback (Redirect URL):</span>
+              <div style="color:#e2eaff;word-break:break-all;"><i class="fas fa-link"></i> ${escHtml(callbacks)}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch(e) {
+    container.innerHTML = `<div style="padding:20px;text-align:center;color:var(--red);">API ro'yxatini yuklashda xatolik yuz berdi.</div>`;
+  }
+};
+
+window.createOAuthApp = async function() {
+  const appName = (document.getElementById('apiAppName')?.value || '').trim();
+  const requestUrl = (document.getElementById('apiRequestUrl')?.value || '').trim();
+  const callbackUrl = (document.getElementById('apiCallbackUrl')?.value || '').trim();
+
+  const uId = curId || curTeacherId || curAdminId;
+  const uType = curType || 'student';
+
+  if (!appName || !requestUrl || !callbackUrl) {
+    toast("Barcha maydonlarni to'ldiring (Ilova nomi, So'rov keladigan sayt linki va Callback linki).", "error");
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/oauth/apps/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: uId, userType: uType, appName, requestUrl, callbackUrl })
+    });
+    const data = await res.json();
+    if (data.ok && data.app) {
+      toast("API Muvaffaqiyatli yaratildi va Oq ro'yxatga qo'shildi!", "success");
+      document.getElementById('apiAppName').value = '';
+      document.getElementById('apiRequestUrl').value = '';
+      document.getElementById('apiCallbackUrl').value = '';
+      
+      openGlobalModal(`
+        <div style="padding:10px;">
+          <h3 style="color:var(--cyan);margin-bottom:12px;"><i class="fas fa-check-circle"></i> API Kalit Muvaffaqiyatli Yaratildi!</h3>
+          <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Quyidagi Client Secret faqat <b>bir marta</b> ko'rsatiladi. Uni xavfsiz joyda saqlang!</p>
+          
+          <div style="background:var(--bg);padding:14px;border-radius:10px;margin-bottom:14px;font-size:13px;">
+            <div style="margin-bottom:10px;">
+              <strong style="color:var(--text3);">Client ID:</strong>
+              <div style="font-family:monospace;color:var(--cyan);word-break:break-all;">${escHtml(data.app.clientId)}</div>
+            </div>
+            <div>
+              <strong style="color:var(--text3);">Client Secret:</strong>
+              <div style="font-family:monospace;color:var(--gold);word-break:break-all;">${escHtml(data.app.clientSecret)}</div>
+            </div>
+          </div>
+          <button class="btn btn-cyan btn-block" onclick="closeGlobalModal();loadOAuthApps();">Tushunarli</button>
+        </div>
+      `);
+      loadOAuthApps();
+    } else {
+      toast(data.err || "API yaratishda xatolik yuz berdi.", "error");
+    }
+  } catch(e) {
+    toast("Tarmoq xatosi", "error");
+  }
+};
+
+window.openEditOAuthAppModal = function(clientId, appName, origins, callbacks) {
+  openGlobalModal(`
+    <div style="padding:10px;">
+      <h3 style="color:var(--gold);margin-bottom:12px;"><i class="fas fa-edit"></i> Oq ro'yxatni almashtirish / Tahrirlash</h3>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:16px;">Ushbu API uchun ruxsat berilgan so'rov va callback manzillarini o'zgartirishingiz mumkin.</p>
+      
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px;">Ilova Nomi</label>
+        <input type="text" id="editApiAppName" class="inp" value="${escHtml(appName)}" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--bor);color:#fff;border-radius:8px;">
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px;">So'rov keladigan sayt manzili (Origin URL)</label>
+        <input type="text" id="editApiRequestUrl" class="inp" value="${escHtml(origins)}" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--bor);color:#fff;border-radius:8px;">
+      </div>
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px;">Callback / Redirect manzili (Callback URL)</label>
+        <input type="text" id="editApiCallbackUrl" class="inp" value="${escHtml(callbacks)}" style="width:100%;padding:10px;background:var(--bg);border:1px solid var(--bor);color:#fff;border-radius:8px;">
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button class="btn" onclick="closeGlobalModal()" style="background:var(--card2);">Bekor qilish</button>
+        <button class="btn btn-gold" onclick="saveEditOAuthApp('${escHtml(clientId)}')"><i class="fas fa-save"></i> Saqlash</button>
+      </div>
+    </div>
+  `);
+};
+
+window.saveEditOAuthApp = async function(clientId) {
+  const appName = (document.getElementById('editApiAppName')?.value || '').trim();
+  const requestUrl = (document.getElementById('editApiRequestUrl')?.value || '').trim();
+  const callbackUrl = (document.getElementById('editApiCallbackUrl')?.value || '').trim();
+  const uId = curId || curTeacherId || curAdminId;
+  const uType = curType || 'student';
+
+  if (!appName || !requestUrl || !callbackUrl) {
+    toast("Barcha maydonlarni to'ldiring", "error");
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/oauth/apps/${clientId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: uId, userType: uType, appName, requestUrl, callbackUrl })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast("Oq ro'yxat muvaffaqiyatli almashtirildi!", "success");
+      closeGlobalModal();
+      loadOAuthApps();
+    } else {
+      toast(data.err || "Yangilashda xatolik", "error");
+    }
+  } catch(e) {
+    toast("Tarmoq xatosi", "error");
+  }
+};
+
+window.deleteOAuthApp = async function(clientId) {
+  if (!confirm("Haqiqatan ham ushbu API kalitini o'chirmoqchimisiz?")) return;
+  const uId = curId || curTeacherId || curAdminId;
+  const uType = curType || 'student';
+
+  try {
+    const res = await fetch(`/api/oauth/apps/${clientId}?userId=${uId}&userType=${uType}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.ok) {
+      toast("API o'chirildi", "success");
+      loadOAuthApps();
+    } else {
+      toast(data.err || "O'chirishda xatolik", "error");
+    }
+  } catch(e) {
+    toast("Tarmoq xatosi", "error");
+  }
+};
+
+window.showOAuthSdkCodeModal = function(clientId) {
+  const codeSnippet = `<!-- 1. Texnoo Auth SDK ni yuklang -->\n<script src="${window.location.origin}/sdk/texnoo-auth.js"><\/script>\n\n<!-- 2. Kirish tugmasi va funksiyani chaqiring -->\n<button onclick="loginWithTexnoo()">Texnoo orqali kirish</button>\n\n<script>\nfunction loginWithTexnoo() {\n  TexnooAuth.login({\n    clientId: '${clientId}',\n    redirectUri: window.location.origin + '/callback.html',\n    onSuccess: function(user) {\n      console.log('Avatar URL:', user.avatar);\n      console.log('Ism:', user.name);\n      console.log('Email:', user.email);\n      alert('Xush kelibsiz, ' + user.name);\n    }\n  });\n}\n<\/script>`;
+
+  openGlobalModal(`
+    <div style="padding:10px;">
+      <h3 style="color:var(--cyan);margin-bottom:12px;"><i class="fas fa-code"></i> Saytingizga Texnoo Auth ni Ulash</h3>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Quyidagi HTML va JavaScript kodini o'z saytingizga qo'shing:</p>
+      
+      <textarea readonly style="width:100%;height:220px;background:#060c18;color:#00ff88;font-family:monospace;padding:12px;border:1px solid var(--bor);border-radius:8px;font-size:12px;box-sizing:border-box;white-space:pre;">${escHtml(codeSnippet)}</textarea>
+      
+      <div style="display:flex;justify-content:space-between;margin-top:14px;align-items:center;">
+        <button class="btn btn-cyan btn-sm" onclick="copyToClipboard(\`${escHtml(codeSnippet)}\`)"><i class="fas fa-copy"></i> Kodni Nusxalash</button>
+        <button class="btn btn-sm" onclick="closeGlobalModal()">Yopish</button>
+      </div>
+    </div>
+  `);
+};
+
+window.copyToClipboard = function(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    toast("Nusxalandi!", "success");
+  }).catch(() => {
+    toast("Nusxalash imkonsiz", "error");
+  });
+};

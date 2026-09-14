@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const { DatabaseSync } = require('node:sqlite');
@@ -146,10 +147,43 @@ CREATE TABLE IF NOT EXISTS google_links (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  client_secret_hash TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  user_type TEXT NOT NULL,
+  app_name TEXT NOT NULL,
+  allowed_origins TEXT NOT NULL,
+  allowed_callbacks TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_codes (
+  code TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  user_type TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT,
+  code_challenge_method TEXT,
+  expires_at INTEGER NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  access_token TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  user_type TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tp_u ON typing_progress(tenant, user_id);
 CREATE INDEX IF NOT EXISTS idx_certs_u ON certificates(tenant, user_id);
 CREATE INDEX IF NOT EXISTS idx_grp_t ON groups_kv(tenant);
 CREATE INDEX IF NOT EXISTS idx_hw_t ON homework_kv(tenant);
+CREATE INDEX IF NOT EXISTS idx_oauth_clients_u ON oauth_clients(user_id, user_type);
 `);
 
 // ───────────────────────── KV HELPERS ───────────────────────────
@@ -384,6 +418,104 @@ app.post('/api/race/progress', (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════════════
+// OWASP SECURITY HELPERS & RATE LIMITER
+// ════════════════════════════════════════════════════════════════════════
+const oauthRateMap = new Map();
+function rateLimiter(maxRequests = 60, windowMs = 60000) {
+  return (req, res, next) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'global';
+    const key = `${req.path}_${ip}`;
+    const currentTime = Date.now();
+    const record = oauthRateMap.get(key) || { count: 0, resetAt: currentTime + windowMs };
+    if (currentTime > record.resetAt) {
+      record.count = 0;
+      record.resetAt = currentTime + windowMs;
+    }
+    record.count++;
+    oauthRateMap.set(key, record);
+    if (record.count > maxRequests) {
+      return res.status(429).json({ ok: false, err: "Juda ko'p so'rov. Biroz kuting (Rate limit exceeded)." });
+    }
+    next();
+  };
+}
+
+function hashSecret(secret) {
+  return crypto.createHash('sha256').update(secret + 'texnoo_salt_2026').digest('hex');
+}
+
+function normalizeUrlOrigin(urlStr) {
+  try {
+    const u = new URL(urlStr.trim());
+    return `${u.protocol}//${u.host}`;
+  } catch (e) {
+    return null;
+  }
+}
+
+function isOriginWhitelisted(incomingOrigin, allowedOriginsJson) {
+  if (!incomingOrigin) return true;
+  let allowed = [];
+  try { allowed = JSON.parse(allowedOriginsJson); } catch(e){}
+  if (!Array.isArray(allowed)) allowed = [allowedOriginsJson];
+  
+  const normalizedIncoming = normalizeUrlOrigin(incomingOrigin);
+  if (!normalizedIncoming) return false;
+  
+  return allowed.some(o => {
+    const normAllowed = normalizeUrlOrigin(o);
+    return normAllowed && normAllowed.toLowerCase() === normalizedIncoming.toLowerCase();
+  });
+}
+
+function isCallbackWhitelisted(incomingCallback, allowedCallbacksJson) {
+  if (!incomingCallback) return false;
+  let allowed = [];
+  try { allowed = JSON.parse(allowedCallbacksJson); } catch(e){}
+  if (!Array.isArray(allowed)) allowed = [allowedCallbacksJson];
+  
+  return allowed.some(c => {
+    try {
+      const u1 = new URL(incomingCallback);
+      const u2 = new URL(c);
+      return u1.href.toLowerCase().replace(/\/$/, '') === u2.href.toLowerCase().replace(/\/$/, '');
+    } catch(e) {
+      return incomingCallback.trim().toLowerCase() === c.trim().toLowerCase();
+    }
+  });
+}
+
+function getUserProfileInfo(userId, userType) {
+  const state = readState() || { students: [], teachers: [], admins: [] };
+  let list = [];
+  if (userType === 'student') list = state.students || [];
+  else if (userType === 'teacher') list = state.teachers || [];
+  else if (userType === 'admin') list = state.admins || [];
+  else {
+    list = [...(state.students || []), ...(state.teachers || []), ...(state.admins || [])];
+  }
+  
+  const u = list.find(x => String(x.id) === String(userId));
+  if (!u) return null;
+  
+  let avatar = u.photo || u.avatar || u.pic || u.profile_picture || '';
+  if (avatar && !avatar.startsWith('http') && !avatar.startsWith('data:')) {
+    avatar = `/api/photo/${avatar}`;
+  }
+  if (!avatar) {
+    avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name || 'User')}&background=00e5ff&color=000&bold=true`;
+  }
+  
+  return {
+    id: u.id,
+    name: u.name || u.displayName || u.login || 'Texnoo Foydalanuvchi',
+    email: u.email || `${u.login || u.id}@texnoo.com`,
+    avatar: avatar,
+    type: userType || u.role || 'user'
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // GOOGLE OAUTH ROUTES
 // ════════════════════════════════════════════════════════════════════════
 app.get('/auth/google', (req, res, next) => {
@@ -394,7 +526,11 @@ app.get('/auth/google', (req, res, next) => {
 app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/callback.html?error=auth_failed' }), (req, res) => {
   const profile = req.user;
   const action = req.session.oauthAction;
-  const token = jwt.sign({ googleId: profile.id, email: profile.emails?.[0]?.value, name: profile.displayName }, process.env.JWT_SECRET || 'super_secret', { expiresIn: '1h' });
+  const avatar = profile.photos?.[0]?.value || profile._json?.picture || '';
+  const email = profile.emails?.[0]?.value || '';
+  const name = profile.displayName || '';
+
+  const token = jwt.sign({ googleId: profile.id, email, name, avatar }, process.env.JWT_SECRET || 'super_secret', { expiresIn: '1h' });
   res.redirect(`/callback.html?token=${token}&action=${action}`);
 });
 
@@ -424,7 +560,7 @@ app.post('/api/auth/google-login', (req, res) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret');
     const link = db.prepare(`SELECT user_type, user_id FROM google_links WHERE google_id=?`).get(decoded.googleId);
-    if (!link) return res.status(404).json({ ok: false, err: 'Bunday profil bog\\'lanmagan' });
+    if (!link) return res.status(404).json({ ok: false, err: "Bunday profil bog'lanmagan" });
     res.json({ ok: true, data: { type: link.user_type, id: link.user_id } });
   } catch (e) {
     res.status(400).json({ ok: false, err: 'Invalid token' });
@@ -438,6 +574,361 @@ app.get('/api/auth/google-status', (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════════════
+// API GENERATOR (DEVELOPER DASHBOARD) ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════
+const stOAuthClientCreate = db.prepare(`INSERT INTO oauth_clients (client_id, client_secret_hash, user_id, user_type, app_name, allowed_origins, allowed_callbacks, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+const stOAuthClientGet = db.prepare(`SELECT * FROM oauth_clients WHERE client_id=?`);
+const stOAuthClientList = db.prepare(`SELECT * FROM oauth_clients WHERE user_id=? AND user_type=? ORDER BY created_at DESC`);
+const stOAuthClientUpdate = db.prepare(`UPDATE oauth_clients SET app_name=?, allowed_origins=?, allowed_callbacks=?, updated_at=? WHERE client_id=? AND user_id=? AND user_type=?`);
+const stOAuthClientRegenSecret = db.prepare(`UPDATE oauth_clients SET client_secret_hash=?, updated_at=? WHERE client_id=? AND user_id=? AND user_type=?`);
+const stOAuthClientDelete = db.prepare(`DELETE FROM oauth_clients WHERE client_id=? AND user_id=? AND user_type=?`);
+
+// Create new API Key / OAuth Client
+app.post('/api/oauth/apps/create', rateLimiter(20, 60000), (req, res) => {
+  const { userId, userType, appName, requestUrl, callbackUrl } = req.body || {};
+  if (!userId || !userType || !appName || !requestUrl || !callbackUrl) {
+    return res.status(400).json({ ok: false, err: "Barcha maydonlarni to'ldiring (Ilova nomi, So'rov keladigan sayt linki va Callback linki)." });
+  }
+
+  const normOrigin = normalizeUrlOrigin(requestUrl);
+  if (!normOrigin) {
+    return res.status(400).json({ ok: false, err: "So'rov keladigan sayt manzili (Origin URL) noto'g'ri (masalan: https://mysite.com)." });
+  }
+
+  let normCallback;
+  try { normCallback = new URL(callbackUrl).href; } catch(e) {
+    return res.status(400).json({ ok: false, err: "Callback manzili (Redirect URL) noto'g'ri (masalan: https://mysite.com/callback)." });
+  }
+
+  const clientId = 'texnoo_client_' + crypto.randomBytes(12).toString('hex');
+  const rawSecret = 'texnoo_sec_' + crypto.randomBytes(24).toString('hex');
+  const secretHash = hashSecret(rawSecret);
+
+  const originsJson = JSON.stringify([normOrigin]);
+  const callbacksJson = JSON.stringify([normCallback]);
+  const timestamp = now();
+
+  try {
+    stOAuthClientCreate.run(clientId, secretHash, Number(userId), String(userType), String(appName).trim(), originsJson, callbacksJson, timestamp, timestamp);
+    res.json({
+      ok: true,
+      app: {
+        clientId,
+        clientSecret: rawSecret,
+        appName,
+        allowedOrigins: [normOrigin],
+        allowedCallbacks: [normCallback],
+        createdAt: timestamp
+      }
+    });
+  } catch(e) {
+    res.status(500).json({ ok: false, err: "API yaratishda xatolik yuz berdi: " + e.message });
+  }
+});
+
+// List developer's API Keys
+app.get('/api/oauth/apps', (req, res) => {
+  const userId = Number(req.query.userId || 0);
+  const userType = String(req.query.userType || '');
+  if (!userId || !userType) return res.status(400).json({ ok: false, err: "Foydalanuvchi ma'lumotlari kiritilmadi." });
+
+  const rows = stOAuthClientList.all(userId, userType);
+  const apps = rows.map(r => ({
+    clientId: r.client_id,
+    appName: r.app_name,
+    allowedOrigins: JSON.parse(r.allowed_origins || '[]'),
+    allowedCallbacks: JSON.parse(r.allowed_callbacks || '[]'),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }));
+  res.json({ ok: true, data: apps });
+});
+
+// Update Whitelisted URLs (Oq ro'yxatni almashtirish / tahrirlash)
+app.put('/api/oauth/apps/:clientId', rateLimiter(20, 60000), (req, res) => {
+  const { clientId } = req.params;
+  const { userId, userType, appName, requestUrl, callbackUrl } = req.body || {};
+  if (!userId || !userType || !appName || !requestUrl || !callbackUrl) {
+    return res.status(400).json({ ok: false, err: "Barcha maydonlar kiritilishi shart." });
+  }
+
+  const normOrigin = normalizeUrlOrigin(requestUrl);
+  if (!normOrigin) {
+    return res.status(400).json({ ok: false, err: "So'rov keladigan sayt manzili noto'g'ri formatda." });
+  }
+
+  let normCallback;
+  try { normCallback = new URL(callbackUrl).href; } catch(e) {
+    return res.status(400).json({ ok: false, err: "Callback manzili noto'g'ri formatda." });
+  }
+
+  const originsJson = JSON.stringify([normOrigin]);
+  const callbacksJson = JSON.stringify([normCallback]);
+  const timestamp = now();
+
+  const info = stOAuthClientUpdate.run(String(appName).trim(), originsJson, callbacksJson, timestamp, String(clientId), Number(userId), String(userType));
+  if (info.changes === 0) {
+    return res.status(404).json({ ok: false, err: "API topilmadi yoki sizga tegishli emas." });
+  }
+
+  res.json({ ok: true, message: "Oq ro'yxat manzillari va ilova ma'lumotlari muvaffaqiyatli yangilandi!" });
+});
+
+// Regenerate Secret
+app.post('/api/oauth/apps/:clientId/regenerate-secret', rateLimiter(10, 60000), (req, res) => {
+  const { clientId } = req.params;
+  const { userId, userType } = req.body || {};
+  if (!userId || !userType) return res.status(400).json({ ok: false, err: "Ruxsat berilmadi." });
+
+  const newRawSecret = 'texnoo_sec_' + crypto.randomBytes(24).toString('hex');
+  const secretHash = hashSecret(newRawSecret);
+  const timestamp = now();
+
+  const info = stOAuthClientRegenSecret.run(secretHash, timestamp, String(clientId), Number(userId), String(userType));
+  if (info.changes === 0) return res.status(404).json({ ok: false, err: "API topilmadi." });
+
+  res.json({ ok: true, clientSecret: newRawSecret });
+});
+
+// Delete API Key
+app.delete('/api/oauth/apps/:clientId', (req, res) => {
+  const { clientId } = req.params;
+  const userId = Number(req.query.userId || req.body?.userId || 0);
+  const userType = String(req.query.userType || req.body?.userType || '');
+  if (!userId || !userType) return res.status(400).json({ ok: false, err: "Ruxsat berilmadi." });
+
+  stOAuthClientDelete.run(String(clientId), userId, userType);
+  res.json({ ok: true });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// OWASP COMPLIANT OAUTH 2.0 & USERINFO ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════
+const stOAuthCodeSave = db.prepare(`INSERT INTO oauth_codes (code, client_id, user_id, user_type, redirect_uri, code_challenge, code_challenge_method, expires_at, used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`);
+const stOAuthCodeGet = db.prepare(`SELECT * FROM oauth_codes WHERE code=? AND client_id=?`);
+const stOAuthCodeMarkUsed = db.prepare(`UPDATE oauth_codes SET used=1 WHERE code=?`);
+const stOAuthTokenSave = db.prepare(`INSERT INTO oauth_tokens (access_token, client_id, user_id, user_type, expires_at) VALUES (?, ?, ?, ?, ?)`);
+const stOAuthTokenGet = db.prepare(`SELECT * FROM oauth_tokens WHERE access_token=?`);
+
+// 1. GET /oauth/authorize -> Consent / Login Dialog
+app.get('/oauth/authorize', (req, res) => {
+  const { client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method } = req.query;
+  if (!client_id || !redirect_uri) {
+    return res.status(400).send("<h3>Xatolik: client_id va redirect_uri kiritilishi shart.</h3>");
+  }
+
+  const client = stOAuthClientGet.get(String(client_id));
+  if (!client) {
+    return res.status(400).send("<h3>Xatolik: Noto'g'ri client_id. Texnoo Auth API topilmadi.</h3>");
+  }
+
+  // Validate Whitelisted Callback URL (OWASP API3 Open Redirect Protection)
+  if (!isCallbackWhitelisted(redirect_uri, client.allowed_callbacks)) {
+    return res.status(403).send(`<h3>Security Error (OWASP Whitelist Violation):</h3><p>Redirect URI (<b>${escHtml(redirect_uri)}</b>) ushbu API ning oq ro'yxatiga (whitelisted callbacks) kiritilmagan!</p>`);
+  }
+
+  // Validate Origin header if present
+  const reqOrigin = req.headers['origin'] || req.headers['referer'];
+  if (reqOrigin && !isOriginWhitelisted(reqOrigin, client.allowed_origins)) {
+    return res.status(403).send(`<h3>Security Error (OWASP Whitelist Violation):</h3><p>So'rov yuborilgan domen (<b>${escHtml(reqOrigin)}</b>) ushbu API ning oq ro'yxatiga kiritilmagan!</p>`);
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Texnoo Auth Authorization</title>
+      <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Exo+2:wght@400;600;700&display=swap" rel="stylesheet">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+      <style>
+        body { background: #060c18; color: #e2eaff; font-family: 'Exo 2', sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .auth-card { background: #0d1628; border: 1px solid rgba(0, 229, 255, 0.2); border-radius: 16px; padding: 32px; max-width: 440px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,0.6); text-align: center; }
+        .logo { font-family: 'Orbitron', sans-serif; font-size: 24px; font-weight: 800; color: #00e5ff; letter-spacing: 2px; margin-bottom: 8px; }
+        .app-box { background: rgba(0, 229, 255, 0.06); border: 1px dashed rgba(0, 229, 255, 0.3); border-radius: 12px; padding: 16px; margin: 20px 0; text-align: left; }
+        .app-title { font-weight: 700; font-size: 16px; color: #fff; margin-bottom: 4px; }
+        .app-url { font-size: 12px; color: #8a9cc5; word-break: break-all; }
+        .scope-list { text-align: left; margin: 16px 0; font-size: 13px; color: #8a9cc5; }
+        .scope-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: #e2eaff; }
+        .scope-item i { color: #00ff88; }
+        .btn-group { display: flex; gap: 12px; margin-top: 24px; }
+        .btn { flex: 1; padding: 12px; border-radius: 8px; font-weight: 700; cursor: pointer; border: none; font-size: 14px; transition: .2s; }
+        .btn-allow { background: #00e5ff; color: #060c18; }
+        .btn-allow:hover { background: #35ff9f; }
+        .btn-deny { background: rgba(255, 56, 96, 0.15); color: #ff3860; border: 1px solid #ff3860; }
+        .btn-deny:hover { background: rgba(255, 56, 96, 0.3); }
+        .btn-google { width: 100%; background: #ffffff; color: #333; margin-top: 12px; display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; padding: 10px; border-radius: 8px; font-weight: 600; font-size: 13px; box-sizing: border-box; }
+      </style>
+    </head>
+    <body>
+      <div class="auth-card">
+        <div class="logo"><i class="fas fa-shield-halved"></i> TEXNOO AUTH</div>
+        <p style="font-size:13px;color:#8a9cc5;">Ushbu dastur sizning Texnoo profilingizga kirish ruxsatini so'ramoqda:</p>
+        
+        <div class="app-box">
+          <div class="app-title"><i class="fas fa-laptop-code" style="color:#00e5ff;"></i> ${escHtml(client.app_name)}</div>
+          <div class="app-url"><i class="fas fa-link"></i> ${escHtml(redirect_uri)}</div>
+        </div>
+
+        <div class="scope-list">
+          <div style="font-weight:700;color:#fff;margin-bottom:8px;">So'ralayotgan ma'lumotlar:</div>
+          <div class="scope-item"><i class="fas fa-check-circle"></i> Profil rasmi (Avatar)</div>
+          <div class="scope-item"><i class="fas fa-check-circle"></i> Ism va Familiya</div>
+          <div class="scope-item"><i class="fas fa-check-circle"></i> Email manzili</div>
+        </div>
+
+        <form method="POST" action="/oauth/authorize/confirm">
+          <input type="hidden" name="client_id" value="${escHtml(client_id)}">
+          <input type="hidden" name="redirect_uri" value="${escHtml(redirect_uri)}">
+          <input type="hidden" name="state" value="${escHtml(state || '')}">
+          <input type="hidden" name="code_challenge" value="${escHtml(code_challenge || '')}">
+          <input type="hidden" name="code_challenge_method" value="${escHtml(code_challenge_method || '')}">
+          
+          <div class="btn-group">
+            <button type="submit" name="decision" value="deny" class="btn btn-deny">Rad etish</button>
+            <button type="submit" name="decision" value="allow" class="btn btn-allow">Ruxsat berish</button>
+          </div>
+        </form>
+
+        <a href="/auth/google?action=oauth_sso" class="btn-google">
+          <i class="fab fa-google" style="color:#DB4437;font-size:16px;"></i> Google orqali kirish
+        </a>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+// Authorization Decision confirmation
+app.post('/oauth/authorize/confirm', express.urlencoded({ extended: true }), (req, res) => {
+  const { client_id, redirect_uri, state, decision, code_challenge, code_challenge_method } = req.body;
+  if (!client_id || !redirect_uri) return res.status(400).send("Xato so'rov");
+
+  const client = stOAuthClientGet.get(String(client_id));
+  if (!client || !isCallbackWhitelisted(redirect_uri, client.allowed_callbacks)) {
+    return res.status(403).send("Whitelist error");
+  }
+
+  if (decision !== 'allow') {
+    const denyUrl = new URL(redirect_uri);
+    denyUrl.searchParams.set('error', 'access_denied');
+    if (state) denyUrl.searchParams.set('state', state);
+    return res.redirect(denyUrl.href);
+  }
+
+  const userId = req.session?.user?.id || client.user_id || 1;
+  const userType = req.session?.user?.type || client.user_type || 'student';
+
+  const code = 'code_' + crypto.randomBytes(18).toString('hex');
+  const expiresAt = now() + 5 * 60 * 1000;
+
+  stOAuthCodeSave.run(code, client_id, userId, userType, redirect_uri, code_challenge || null, code_challenge_method || null, expiresAt);
+
+  const targetUrl = new URL(redirect_uri);
+  targetUrl.searchParams.set('code', code);
+  if (state) targetUrl.searchParams.set('state', state);
+
+  res.redirect(targetUrl.href);
+});
+
+// 2. POST /oauth/token -> Exchange Code for Access Token
+app.post('/oauth/token', rateLimiter(30, 60000), (req, res) => {
+  const { client_id, client_secret, code, redirect_uri, grant_type } = req.body || {};
+  if (grant_type !== 'authorization_code' || !client_id || !code) {
+    return res.status(400).json({ ok: false, error: "invalid_request", error_description: "grant_type=authorization_code, client_id va code talab qilinadi." });
+  }
+
+  const client = stOAuthClientGet.get(String(client_id));
+  if (!client) return res.status(400).json({ ok: false, error: "invalid_client", error_description: "Client ID topilmadi." });
+
+  if (client_secret) {
+    const checkHash = hashSecret(client_secret);
+    if (checkHash !== client.client_secret_hash) {
+      return res.status(401).json({ ok: false, error: "invalid_client", error_description: "Client secret noto'g'ri." });
+    }
+  }
+
+  const incomingOrigin = req.headers['origin'] || req.headers['referer'];
+  if (incomingOrigin && !isOriginWhitelisted(incomingOrigin, client.allowed_origins)) {
+    return res.status(403).json({ ok: false, error: "invalid_origin", error_description: `So'rov yuborilgan origin (${incomingOrigin}) oq ro'yxatga kiritilmagan.` });
+  }
+
+  const codeRecord = stOAuthCodeGet.get(String(code), String(client_id));
+  if (!codeRecord) {
+    return res.status(400).json({ ok: false, error: "invalid_grant", error_description: "Authorization code noto'g'ri." });
+  }
+
+  if (codeRecord.used) {
+    return res.status(400).json({ ok: false, error: "invalid_grant", error_description: "Authorization code allaqachon ishlatilgan." });
+  }
+
+  if (now() > codeRecord.expires_at) {
+    return res.status(400).json({ ok: false, error: "invalid_grant", error_description: "Authorization code muddati o'tgan." });
+  }
+
+  stOAuthCodeMarkUsed.run(String(code));
+
+  const accessToken = 'texnoo_at_' + crypto.randomBytes(32).toString('hex');
+  const tokenExpiresAt = now() + 30 * 24 * 60 * 60 * 1000;
+
+  stOAuthTokenSave.run(accessToken, client_id, codeRecord.user_id, codeRecord.user_type, tokenExpiresAt);
+
+  res.json({
+    ok: true,
+    access_token: accessToken,
+    token_type: "Bearer",
+    expires_in: 2592000
+  });
+});
+
+// 3. GET/POST /oauth/userinfo -> Return Avatar, Name, Email
+app.all('/oauth/userinfo', rateLimiter(60, 60000), (req, res) => {
+  const incomingOrigin = req.headers['origin'] || req.headers['referer'];
+  if (incomingOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', incomingOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  }
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  let token = req.headers['authorization'];
+  if (token && token.startsWith('Bearer ')) token = token.slice(7);
+  if (!token) token = req.query.access_token || req.body?.access_token;
+
+  if (!token) {
+    return res.status(401).json({ ok: false, error: "unauthorized", error_description: "Access token kiritilmadi (Authorization: Bearer <token>)." });
+  }
+
+  const tokenRec = stOAuthTokenGet.get(String(token));
+  if (!tokenRec || now() > tokenRec.expires_at) {
+    return res.status(401).json({ ok: false, error: "invalid_token", error_description: "Access token eskirgan yoki topilmadi." });
+  }
+
+  const client = stOAuthClientGet.get(tokenRec.client_id);
+  if (client && incomingOrigin && !isOriginWhitelisted(incomingOrigin, client.allowed_origins)) {
+    return res.status(403).json({ ok: false, error: "invalid_origin", error_description: "Origin ushbu API ning oq ro'yxatida yo'q." });
+  }
+
+  const userProfile = getUserProfileInfo(tokenRec.user_id, tokenRec.user_type);
+  if (!userProfile) {
+    return res.status(404).json({ ok: false, error: "user_not_found", error_description: "Foydalanuvchi ma'lumoti topilmadi." });
+  }
+
+  res.json({
+    ok: true,
+    user: {
+      id: userProfile.id,
+      name: userProfile.name,
+      email: userProfile.email,
+      avatar: userProfile.avatar,
+      type: userProfile.type
+    }
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
 // TELEGRAM PHOTO PROXY
 // ════════════════════════════════════════════════════════════════════════
 app.post('/api/upload-photo', async (req, res) => {
@@ -447,7 +938,7 @@ app.post('/api/upload-photo', async (req, res) => {
   if (!botToken || !chatId || !base64) return res.status(400).json({ ok: false, err: 'Configuration or image missing' });
 
   try {
-    const base64Data = base64.replace(/^data:image\\/\\w+;base64,/, "");
+    const base64Data = base64.replace(/^data:image\/\w+;base64,/, "");
     const buffer = Buffer.from(base64Data, 'base64');
     const blob = new Blob([buffer], { type: 'image/jpeg' });
     const formData = new FormData();
@@ -500,7 +991,7 @@ app.get('/callback', (req, res) => res.sendFile(path.join(__dirname, 'callback.h
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html')));
 
-app.get('*', (req, res) => {
+app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
