@@ -519,13 +519,14 @@ function getUserProfileInfo(userId, userType) {
 // GOOGLE OAUTH ROUTES
 // ════════════════════════════════════════════════════════════════════════
 app.get('/auth/google', (req, res, next) => {
-  req.session.oauthAction = req.query.action || 'login';
-  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+  const action = req.query.action || 'login';
+  if (req.session) req.session.oauthAction = action;
+  passport.authenticate('google', { scope: ['profile', 'email'], state: action })(req, res, next);
 });
 
 app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/callback.html?error=auth_failed' }), (req, res) => {
   const profile = req.user;
-  const action = req.session.oauthAction;
+  const action = req.query.state || req.session?.oauthAction || 'login';
   const avatar = profile.photos?.[0]?.value || profile._json?.picture || '';
   const email = profile.emails?.[0]?.value || '';
   const name = profile.displayName || '';

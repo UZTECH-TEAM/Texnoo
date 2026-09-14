@@ -45,8 +45,10 @@
       }
 
       if (token) {
+        const act = action || 'login';
         localStorage.setItem('google_auth_token', token);
-        if (action === 'link') {
+        localStorage.setItem('google_auth_action', act);
+        if (act === 'link') {
           document.getElementById('status').innerText = "Google hisob bog'landi!";
         } else {
           document.getElementById('status').innerText = "Muvaffaqiyatli kirildi!";

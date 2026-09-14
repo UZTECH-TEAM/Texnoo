@@ -3765,31 +3765,31 @@ window.unlinkGoogleAccount = async function() {
 
 window.handleGoogleCallback = async function() {
   const token = localStorage.getItem('google_auth_token');
+  const action = localStorage.getItem('google_auth_action') || 'login';
+
   if (token) {
     localStorage.removeItem('google_auth_token');
-    
-    // Check if user is trying to link or login
-    // If we have a curType/curId, we are already logged in (maybe redirect back to profile)
-    const ls = document.getElementById('loginScreen');
-    if (!ls || ls.style.display === 'none') {
-      // User is already logged in, they were linking
-      if (curId) {
-        try {
-          const res = await fetch('/api/auth/google-link', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, userType: curType, userId: curId })
-          });
-          if (res.ok) {
-            toast("Google hisob bog'landi!", 'success');
-            if (typeof renderProfileV2 === 'function') renderProfileV2();
-          } else {
-            toast("Bog'lashda xatolik", 'error');
-          }
-        } catch(e) {}
+    localStorage.removeItem('google_auth_action');
+
+    if (action === 'link' && curId) {
+      // User is already logged in, they were linking Google account
+      try {
+        const res = await fetch('/api/auth/google-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, userType: curType, userId: curId })
+        });
+        if (res.ok) {
+          toast("Google hisob bog'landi!", 'success');
+          if (typeof renderProfileV2 === 'function') renderProfileV2();
+        } else {
+          toast("Bog'lashda xatolik", 'error');
+        }
+      } catch(e) {
+        toast("Tarmoq xatosi", 'error');
       }
     } else {
-      // User is logging in
+      // User is logging in via Google
       try {
         const res = await fetch('/api/auth/google-login', {
           method: 'POST',
@@ -3800,12 +3800,30 @@ window.handleGoogleCallback = async function() {
         if (data.ok && data.data) {
           const { type, id } = data.data;
           curType = type;
-          if (type === 'student') { curId = id; enterS(); }
-          else if (type === 'teacher') { curTeacherId = id; enterT(); }
-          else if (type === 'admin') { curAdminId = id; enterA(); }
+
+          // Save session to localStorage so page refresh maintains login state
+          localStorage.setItem('tx_role', type);
+          localStorage.setItem('tx_uid', String(id));
+
+          const ls = document.getElementById('loginScreen');
+          if (ls) ls.style.display = 'none';
+
+          const tb = document.getElementById('topbar');
+          if (tb) tb.style.display = 'flex';
+
+          if (type === 'student') {
+            curId = id;
+            if (typeof enterS === 'function') enterS();
+          } else if (type === 'teacher') {
+            curTeacherId = id;
+            if (typeof enterT === 'function') enterT();
+          } else if (type === 'admin') {
+            curAdminId = id;
+            if (typeof enterA === 'function') enterA();
+          }
           toast('Google orqali kirdingiz!', 'success');
         } else {
-          toast(data.err || "Bunday profil topilmadi. Avval profilingiz sozlamalaridan Google'ni bog'lang.", 'error');
+          toast(data.err || "Google orqali kirishda xatolik yuz berdi.", 'error');
         }
       } catch (e) {
         toast('Tarmoq xatosi', 'error');
