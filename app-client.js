@@ -3798,18 +3798,32 @@ window.handleGoogleCallback = async function() {
         });
         const data = await res.json();
         if (data.ok && data.data) {
-          const { type, id } = data.data;
+          const { type, id, user } = data.data;
           curType = type;
 
-          // Save session to localStorage so page refresh maintains login state
+          // Save session across both systems
+          try {
+            sessionStorage.setItem('teacherTexnoSession', JSON.stringify({ role: type, id: id }));
+          } catch(e) {}
           localStorage.setItem('tx_role', type);
           localStorage.setItem('tx_uid', String(id));
+
+          if (typeof curUser !== 'undefined') {
+            window.curUser = user || { id: id, role: type };
+          }
 
           const ls = document.getElementById('loginScreen');
           if (ls) ls.style.display = 'none';
 
           const tb = document.getElementById('topbar');
           if (tb) tb.style.display = 'flex';
+
+          const ash = document.getElementById('appShell');
+          if (ash) ash.style.display = 'flex';
+
+          if (typeof window.initApp === 'function') {
+            try { window.initApp(); } catch(e) {}
+          }
 
           if (type === 'student') {
             curId = id;
@@ -3821,12 +3835,15 @@ window.handleGoogleCallback = async function() {
             curAdminId = id;
             if (typeof enterA === 'function') enterA();
           }
-          toast('Google orqali kirdingiz!', 'success');
+          if (typeof toast === 'function') toast('Google orqali kirdingiz!', 'success');
+          else if (typeof showToast === 'function') showToast('✅ Google orqali kirdingiz!');
         } else {
-          toast(data.err || "Google orqali kirishda xatolik yuz berdi.", 'error');
+          if (typeof toast === 'function') toast(data.err || "Google orqali kirishda xatolik yuz berdi.", 'error');
+          else if (typeof showToast === 'function') showToast('❌ ' + (data.err || "Google kirishda xatolik"));
         }
       } catch (e) {
-        toast('Tarmoq xatosi', 'error');
+        if (typeof toast === 'function') toast('Tarmoq xatosi', 'error');
+        else if (typeof showToast === 'function') showToast('❌ Tarmoq xatosi');
       }
     }
   }

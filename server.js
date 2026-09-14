@@ -516,23 +516,102 @@ function getUserProfileInfo(userId, userType) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// GOOGLE OAUTH ROUTES
+// UNIFIED AUTH & GOOGLE OAUTH ROUTES
 // ════════════════════════════════════════════════════════════════════════
-app.get('/auth/google', (req, res, next) => {
-  const action = req.query.action || 'login';
-  if (req.session) req.session.oauthAction = action;
-  passport.authenticate('google', { scope: ['profile', 'email'], state: action })(req, res, next);
+app.post('/api/auth/login', (req, res) => {
+  const { identifier, password } = req.body || {};
+  if (!identifier) return res.status(400).json({ ok: false, message: 'Identifier kiritilmadi' });
+
+  const state = readState() || { students: [], teachers: [], admins: [] };
+  const idNorm = String(identifier).trim().toLowerCase();
+  const pwNorm = String(password || '').trim();
+
+  const matches = (u) => {
+    if (!u) return false;
+    const uId = String(u.id || '').toLowerCase();
+    const uPhone = String(u.phone || u.telefon || '').toLowerCase();
+    const uEmail = String(u.email || '').toLowerCase();
+    const uLogin = String(u.login || '').toLowerCase();
+    const isIdMatch = uId === idNorm || uPhone === idNorm || uEmail === idNorm || uLogin === idNorm;
+    if (!isIdMatch) return false;
+    if (!pwNorm) return true;
+    const uPw = String(u.password || u.parol || '');
+    return uPw === pwNorm;
+  };
+
+  const std = (state.students || []).find(matches);
+  if (std) return res.json({ ok: true, role: 'student', user: std });
+
+  const tch = (state.teachers || []).find(matches);
+  if (tch) return res.json({ ok: true, role: 'teacher', user: tch });
+
+  const adm = (state.admins || []).find(matches);
+  if (adm) return res.json({ ok: true, role: 'admin', user: adm });
+
+  return res.status(401).json({ ok: false, message: "Login yoki parol noto'g'ri" });
 });
 
-app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: '/callback.html?error=auth_failed' }), (req, res) => {
-  const profile = req.user;
-  const action = req.query.state || req.session?.oauthAction || 'login';
-  const avatar = profile.photos?.[0]?.value || profile._json?.picture || '';
-  const email = profile.emails?.[0]?.value || '';
-  const name = profile.displayName || '';
+app.get('/auth/google', (req, res, next) => {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !GoogleStrategy) {
+    return res.status(503).send(`
+      <!DOCTYPE html>
+      <html lang="uz">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Google OAuth Sozlanmagan - Texnoo</title>
+        <style>
+          body { background: #060c18; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+          .box { background: #0f172a; border: 1px solid #1e293b; padding: 32px; border-radius: 16px; max-width: 520px; width: 100%; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+          h2 { color: #00e5ff; margin-top: 0; font-size: 22px; }
+          p { color: #94a3b8; line-height: 1.6; font-size: 14px; text-align: left; }
+          .code { background: #020617; padding: 12px; border-radius: 8px; color: #38bdf8; font-family: monospace; font-size: 13px; text-align: left; margin: 15px 0; border: 1px solid #1e293b; word-break: break-all; }
+          .btn { display: inline-block; margin-top: 15px; color: #00e5ff; text-decoration: none; font-weight: 600; font-size: 14px; background: rgba(0,229,255,0.1); padding: 10px 20px; border-radius: 8px; border: 1px solid rgba(0,229,255,0.3); transition: 0.2s; }
+          .btn:hover { background: rgba(0,229,255,0.2); }
+        </style>
+      </head>
+      <body>
+        <div class="box">
+          <h2>⚠️ Google OAuth Serverda Sozlanmagan</h2>
+          <p>Google orqali kirish ishlashi uchun backend serverda <b>GOOGLE_CLIENT_ID</b> va <b>GOOGLE_CLIENT_SECRET</b> o'zgaruvchilari kiritilgan bo'lishi kerak.</p>
+          <p><b>Railway / Hosting Server Environment Variables (Variables):</b></p>
+          <div class="code">
+            GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com<br>
+            GOOGLE_CLIENT_SECRET=GOCSPX-your-secret<br>
+            APP_URL=https://texnoo.com
+          </div>
+          <a href="/" class="btn">← Bosh sahifaga qaytish</a>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+  const action = req.query.action || 'login';
+  if (req.session) req.session.oauthAction = action;
+  passport.authenticate('google', { scope: ['profile', 'email'], state: action })(req, res, (err) => {
+    if (err) {
+      console.error('Google Passport Error:', err);
+      return res.redirect('/callback.html?error=' + encodeURIComponent(err.message || 'OAuth error'));
+    }
+    next();
+  });
+});
 
-  const token = jwt.sign({ googleId: profile.id, email, name, avatar }, process.env.JWT_SECRET || 'super_secret', { expiresIn: '1h' });
-  res.redirect(`/callback.html?token=${token}&action=${action}`);
+app.get('/auth/google/callback', (req, res, next) => {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !GoogleStrategy) {
+    return res.redirect('/callback.html?error=' + encodeURIComponent('Google OAuth is not configured on server'));
+  }
+  passport.authenticate('google', { failureRedirect: '/callback.html?error=auth_failed' })(req, res, () => {
+    const profile = req.user;
+    if (!profile) return res.redirect('/callback.html?error=no_profile');
+    const action = req.query.state || req.session?.oauthAction || 'login';
+    const avatar = profile.photos?.[0]?.value || profile._json?.picture || '';
+    const email = profile.emails?.[0]?.value || '';
+    const name = profile.displayName || '';
+
+    const token = jwt.sign({ googleId: profile.id, email, name, avatar }, process.env.JWT_SECRET || 'super_secret', { expiresIn: '1h' });
+    res.redirect(`/callback.html?token=${token}&action=${action}`);
+  });
 });
 
 app.post('/api/auth/google-link', (req, res) => {
@@ -558,13 +637,74 @@ app.post('/api/auth/google-unlink', (req, res) => {
 
 app.post('/api/auth/google-login', (req, res) => {
   const { token } = req.body;
+  if (!token) return res.status(400).json({ ok: false, err: 'Token missing' });
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret');
     const link = db.prepare(`SELECT user_type, user_id FROM google_links WHERE google_id=?`).get(decoded.googleId);
-    if (!link) return res.status(404).json({ ok: false, err: "Bunday profil bog'lanmagan" });
-    res.json({ ok: true, data: { type: link.user_type, id: link.user_id } });
+
+    if (link) {
+      const userProf = getUserProfileInfo(link.user_id, link.user_type);
+      return res.json({ ok: true, data: { type: link.user_type, id: link.user_id, user: userProf } });
+    }
+
+    // 1. Try matching existing user by email
+    const state = readState() || { students: [], teachers: [], admins: [] };
+    const emailNorm = (decoded.email || '').toLowerCase().trim();
+
+    let matchedUser = null;
+    let matchedType = 'student';
+
+    if (emailNorm) {
+      const std = (state.students || []).find(s => (s.email || '').toLowerCase().trim() === emailNorm || String(s.id || '').toLowerCase() === emailNorm);
+      if (std) { matchedUser = std; matchedType = 'student'; }
+
+      if (!matchedUser) {
+        const tch = (state.teachers || []).find(t => (t.email || '').toLowerCase().trim() === emailNorm);
+        if (tch) { matchedUser = tch; matchedType = 'teacher'; }
+      }
+
+      if (!matchedUser) {
+        const adm = (state.admins || []).find(a => (a.email || '').toLowerCase().trim() === emailNorm);
+        if (adm) { matchedUser = adm; matchedType = 'admin'; }
+      }
+    }
+
+    // 2. If no existing user matched, automatically create a new student account
+    if (!matchedUser) {
+      const existingStudents = state.students || [];
+      const newNum = 100 + existingStudents.length + Math.floor(Math.random() * 50);
+      const newId = `ADM-${newNum}`;
+      matchedUser = {
+        id: newId,
+        name: decoded.name || 'Google Foydalanuvchisi',
+        email: decoded.email || '',
+        avatar: decoded.avatar || '',
+        photo: decoded.avatar || '',
+        group: 'D1',
+        teacherIds: [1],
+        totalCoins: 100,
+        olmos: 0,
+        streak: 1,
+        level: 1,
+        badge: 'Starter',
+        refCode: `REF-${newId}`
+      };
+      if (!state.students) state.students = [];
+      state.students.push(matchedUser);
+      writeState(state);
+      matchedType = 'student';
+    }
+
+    // 3. Save link to google_links table
+    db.prepare(`INSERT INTO google_links (google_id, user_type, user_id, email, name, created_at) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(google_id) DO UPDATE SET user_type=excluded.user_type, user_id=excluded.user_id, email=excluded.email, name=excluded.name`)
+      .run(decoded.googleId, matchedType, matchedUser.id, decoded.email, decoded.name, now());
+
+    const userProf = getUserProfileInfo(matchedUser.id, matchedType) || matchedUser;
+    return res.json({ ok: true, data: { type: matchedType, id: matchedUser.id, user: userProf } });
   } catch (e) {
-    res.status(400).json({ ok: false, err: 'Invalid token' });
+    console.error('Google login verification error:', e);
+    return res.status(400).json({ ok: false, err: 'Invalid token' });
   }
 });
 
