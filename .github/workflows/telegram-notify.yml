@@ -11,6 +11,10 @@ on:
       - develop
   release:
     types: [published]
+  workflow_run:
+    workflows: ["*"]
+    types:
+      - completed
 
 jobs:
   notify:
@@ -53,4 +57,26 @@ jobs:
           curl -X POST \
             -H 'Content-Type: application/json' \
             -d "{\"chat_id\": \"${TELEGRAM_CHAT_ID}\", \"text\": \"$(echo "$MESSAGE" | sed 's/"/\\"/g')\", \"parse_mode\": \"HTML\"}" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+
+  # Agarda yuqoridagi amallarda yoki loyihani yig'ishda xatolik bo'lsa, ushbu qism ishga tushadi
+  notify_on_failure:
+    runs-on: ubuntu-latest
+    if: failure()
+    needs: notify
+    steps:
+      - name: Xatolik haqida Telegramga xabar berish
+        run: |
+          TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_TOKEN }}"
+          TELEGRAM_CHAT_ID="${{ secrets.TELEGRAM_TO }}"
+          
+          ERROR_MESSAGE="❌ <b>WORKFLOW'DA XATOLIK ANIQLANDI!</b>"$'\n'
+          ERROR_MESSAGE="${ERROR_MESSAGE}📁 <b>Loyiha:</b> ${{ github.repository }}"$'\n'
+          ERROR_MESSAGE="${ERROR_MESSAGE}👤 <b>Mas'ul dasturchi:</b> ${{ github.actor }}"$'\n'
+          ERROR_MESSAGE="${ERROR_MESSAGE}⚠️ <b>Holat:</b> Tizimni yig'ish (build/test) jarayoni to'xtab qoldi."$'\n'
+          ERROR_MESSAGE="${ERROR_MESSAGE}🔗 <a href='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'>Xatolik terminalini GitHub'da ko'rish</a>"
+          
+          curl -X POST \
+            -H 'Content-Type: application/json' \
+            -d "{\"chat_id\": \"${TELEGRAM_CHAT_ID}\", \"text\": \"$(echo "$ERROR_MESSAGE" | sed 's/"/\\"/g')\", \"parse_mode\": \"HTML\"}" \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
