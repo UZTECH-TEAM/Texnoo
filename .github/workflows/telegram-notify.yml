@@ -32,18 +32,20 @@ jobs:
             MESSAGE="${MESSAGE}🌿 <b>Tarmoq (Branch):</b> ${{ github.ref_name }}"$'\n'
             MESSAGE="${MESSAGE}👤 <b>Dasturchi:</b> ${{ github.actor }}"$'\n'
             MESSAGE="${MESSAGE}💬 <b>Izoh (Commit):</b> ${{ github.event.head_commit.message }}"$'\n'
-            MESSAGE="✅ <b>git pull qiling</b>"$'\n
+            MESSAGE="${MESSAGE}✅ <b>git pull qiling</b>"$'\n'
             MESSAGE="${MESSAGE}🔗 <a href='${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}'>O'zgarishlarni ko'rish</a>"
           elif [ "${{ github.event_name }}" == "pull_request" ]; then
             MESSAGE="🔀 <b>KOD TEKSHIRUVIGA SO'ROV (PULL REQUEST)</b>"$'\n'
             MESSAGE="${MESSAGE}📁 <b>Loyiha:</b> ${{ github.repository }}"$'\n'
             MESSAGE="${MESSAGE}📌 <b>Sarlavha:</b> ${{ github.event.pull_request.title }}"$'\n'
             MESSAGE="${MESSAGE}👤 <b>Kim tomonidan:</b> ${{ github.event.pull_request.user.login }}"$'\n'
+            MESSAGE="${MESSAGE}✅ <b>git pull qiling</b>"$'\n'
             MESSAGE="${MESSAGE}🔗 <a href='${{ github.event.pull_request.html_url }}'>Tekshirish oynasiga o'tish</a>"
           elif [ "${{ github.event_name }}" == "release" ]; then
             MESSAGE="🎉 <b>YANGI VERSIYA CHIQTID (RELEASE)</b>"$'\n'
             MESSAGE="${MESSAGE}📁 <b>Loyiha:</b> ${{ github.repository }}"$'\n'
             MESSAGE="${MESSAGE}📦 <b>Versiya (Tag):</b> ${{ github.event.release.tag_name }}"$'\n'
+            MESSAGE="${MESSAGE}✅ <b>git pull qiling</b>"$'\n'
             MESSAGE="${MESSAGE}🔗 <a href='${{ github.event.release.html_url }}'>Dasturni yuklab olish</a>"
           fi
           
